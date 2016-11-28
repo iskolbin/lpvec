@@ -28,8 +28,14 @@ local function newVec( size, shift, root, tail )
 	}, PVec )
 end
 
-function PVec.new()
-	return newVec( 0, 0, nil, EMPTY_TAIL )
+function PVec.new( t )
+	local result = newVec( 0, 0, nil, EMPTY_TAIL )
+	if t then
+		for _, v in ipairs( t ) do
+			result:transientPush( v )
+		end
+	end
+	return result
 end
 
 local function copy( array, from, to )
@@ -44,9 +50,10 @@ local function tailSize( self )
 	return self.size == 0 and 0 or (((self.size-1) % 32) + 1)
 end
 
-function PVec:set( i, val )
+function PVec:set( i, val, transient )
 	assert( i >= 1 and i <= self.size, 'Index out of bounds' )
-	if ( i > tailOffset( self )) then
+
+	if i > tailOffset( self ) then
 		local newTail = copy( self.tail )
 		newTail[(i-1) % 32 + 1] = val
 		return newVec( self.size, self.shift, self.root, newTail )
@@ -66,6 +73,7 @@ end
 
 function PVec:get( i )
 	assert( i >= 1 and i <= self.size, 'Index out of bounds' )
+
 	if i > tailOffset( self ) then
 		return self.tail[(i-1) % 32 + 1]
 	else
@@ -85,8 +93,8 @@ local function newPath( levels, tail )
 	return topNode
 end
 
-local function pushLeaf( shift, i, root, tail )
-	local newRoot = copy( root )
+local function pushLeaf( shift, i, root, tail, transient )
+	local newRoot = transient and root or copy( root )
 	local node = newRoot
 	for level = shift, 6, -5 do
 		local subidx = shr( i-1, level ) % 32 + 1
@@ -95,8 +103,7 @@ local function pushLeaf( shift, i, root, tail )
 			node[subidx] = newPath( level-5, tail )
 			return newRoot
 		end
-		
-		child = copy( child )
+		child = transient and child or copy( child )
 		node[subidx] = child
 		node = child
 	end
@@ -104,9 +111,10 @@ local function pushLeaf( shift, i, root, tail )
 	return newRoot
 end
 
-function PVec:push( val )
+function PVec:push( val, transient )
 	local ts = tailSize( self )
 	local size, shift = self.size, self.shift
+
 	if ts ~= 32 then
 		local newTail = copy( self.tail )
 		newTail[#newTail+1] = val
@@ -122,20 +130,25 @@ function PVec:push( val )
 	end
 end
 
-local function lowerTrie( self )
+local function lowerTrie( self, transient )
 	local lowerShift = self.shift - 5
 	local node = self.root[2]
 	for level = lowerShift, 1, -5 do
 		node = node[1]
 	end
-	return newVec( self.size-1, lowerShift, self.root[1], node )
+	if transient then
+		self.root, self.tail, self.size = self.root[1], node, self.size-1
+		return self
+	else
+		return newVec( self.size-1, lowerShift, self.root[1], node )
+	end
 end
 
-local function popTrie( self )
+local function popTrie( self, transient )
 	local newSize = self.size - 33
 	local diverges = xor( newSize , newSize - 1 )
 	local diverged = false
-	local newRoot = copy( self.root )
+	local newRoot = transient and self.root or copy( self.root )
 	local node = newRoot
 	for level = self.shift, 1, -5 do
 		local subidx = shr( newSize-1, level ) % 32 + 1
@@ -147,17 +160,23 @@ local function popTrie( self )
 			node[subidx] = nil
 			node = child
 		else
-			child = copy( child )
+			child = transient and child or copy( child )
 			node[subidx] = child
 			node = child
 		end
 	end
-	return newVec( self.size-1, self.shift, newRoot, node )
+	if transient then
+		self.tail, self.size = node, self.size-1
+		return self
+	else
+		return newVec( self.size-1, self.shift, newRoot, node )
+	end
 end
 
 function PVec:pop()
 	local size = self.size
 	assert( size > 0, 'Vector is empty' )
+
 	if ((size-1) % 32) >= 0 then
 		return newVec( size-1, self.shift, self.root, copy( self.tail, 1, #self.tail-1 ))
 	else
@@ -169,6 +188,57 @@ function PVec:pop()
 			return popTrie( self )
 		end
 	end
+end
+
+function PVec:transientSet( i, val )
+	if i > tailOffset( self ) then
+		self.tail[(i-1) % 32 + 1] = val
+	else
+		local node = self.root
+		for level = self.shift, 1, -5 do
+			node = node[shr(i-1, level) % 32 + 1]
+		end
+		node[(i-1) % 32 + 1] = val
+	end
+	return self
+end
+
+function PVec:transientPush( val )
+	local ts = tailSize( self )
+	local size, shift = self.size, self.shift
+
+	if ts ~= 32 then
+		self.tail[#self.tail+1] = val
+	else
+		if self.size == 32 then
+			self.root = self.tail
+		elseif shr( size, 5 ) > shl( 1, shift ) then
+			self.root, self.shift = newPath( shift, self.tail ), shift + 5
+		else
+			self.root = pushLeaf( shift, size-1, self.root, self.tail, true )
+		end
+		self.tail = {val}
+	end
+	self.size = self.size + 1
+	return self
+end
+
+function PVec:transientPop()
+	local size = self.size
+	assert( size > 0, 'Vector is empty' )
+
+	if ((size-1) % 32) >= 0 then
+		self.tail[#self.tail], self.size = nil, size - 1
+	else
+		if size == 33 then
+			self.root, self.size = nil, 32
+		elseif size - 33 == shl( 1, self.shift ) then
+			lowerTrie( self, true )
+		else
+			popTrie( self, true )
+		end
+	end
+	return self
 end
 
 function PVec:len()
@@ -229,6 +299,40 @@ function PVec:ipairs()
 			return i, leaf[(i-1) % 32 + 1]
 		end
 	end
+end
+
+function PVec:map( f )
+	local result = PVec.new()
+	for i, v in self:ipairs() do
+		result:transientPush( f(v,i,self) )
+	end
+	return result
+end
+
+function PVec:filter( p )
+	local result = PVec.new()
+	for i, v in self:ipairs() do
+		if p(v,i,self) then
+			result:transientPush( v )
+		end
+	end
+	return result
+end
+
+function PVec:reduce( f, acc )
+	for i, v in self:ipairs() do
+		acc, stop = f(v,acc,i,self)
+		if stop then break end
+	end
+	return acc
+end
+
+function PVec:array()
+	local result = {}
+	for i, v in self:ipairs() do
+		result[i] = v
+	end
+	return result
 end
 
 function PVec:__pairs()
