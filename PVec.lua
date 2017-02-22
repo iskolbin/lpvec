@@ -1,17 +1,37 @@
--- Persistent vector implementation for Lua 5.2/LuaJIT
---
--- based on PVec.java by hyPiRion(jeannikl@hypirion.com), see https://github.com/hyPiRion/pvec-perf
--- ported by Ilya Kolbin (iskolbin@gmail.com)
---
--- Needs LuaJIT bitOp or Lua 5.2 bit32 library to work
+--[[
+
+ PVec - v1.0.0 - public domain persistent vector for Lua 5.2/LuaJIT
+ no warranty implied; use at your own risk
+
+ Based on PVec.java by hyPiRion(jeannikl@hypirion.com),
+ see https://github.com/hyPiRion/pvec-perf.
+ Needs LuaJIT bitOp or Lua 5.2 bit32 library to work
+
+ author: Ilya Kolbin (iskolbin@gmail.com)
+ url: github.com/iskolbin/priorityqueue
+
+ TODO
+
+ fallbacks for 5.1 and shift ops for 5.3
+
+ COMPATIBILITY
+
+ Lua 5.2, LuaJIT 1, 2, needs bitOp or bit32 library
+
+ LICENSE
+
+ This software is dual-licensed to the public domain and under the following
+ license: you are granted a perpetual, irrevocable license to copy, modify,
+ publish, and distribute this file as you see fit
+
+--]]
 
 local floor, assert, setmetatable = math.floor, _G.assert, _G.setmetatable
 local unpack = table.unpack or _G.unpack
 
--- TODO fallbacks for 5.1 and shift ops for 5.3
-local shr = (bit or bit32).arshift
-local shl = (bit or bit32).lshift
-local xor = (bit or bit32).bxor
+local shr = (_G.bit or _G.bit32).arshift
+local shl = (_G.bit or _G.bit32).lshift
+local xor = (_G.bit or _G.bit32).bxor
 
 local EMPTY_TAIL = {}
 
@@ -21,8 +41,8 @@ PVec.__index = PVec
 
 local function newVec( size, shift, root, tail )
 	return setmetatable( {
-		size = size, 
-		shift = shift, 
+		size = size,
+		shift = shift,
 		root = root,
 		tail = tail,
 	}, PVec )
@@ -50,7 +70,7 @@ local function tailSize( self )
 	return self.size == 0 and 0 or (((self.size-1) % 32) + 1)
 end
 
-function PVec:set( i, val, transient )
+function PVec:set( i, val )
 	assert( i >= 1 and i <= self.size, 'Index out of bounds' )
 
 	if i > tailOffset( self ) then
@@ -87,7 +107,7 @@ end
 
 local function newPath( levels, tail )
 	local topNode = tail
-	for level = levels, 1, -5 do
+	for _ = levels, 1, -5 do
 		topNode = {topNode}
 	end
 	return topNode
@@ -111,7 +131,7 @@ local function pushLeaf( shift, i, root, tail, transient )
 	return newRoot
 end
 
-function PVec:push( val, transient )
+function PVec:push( val )
 	local ts = tailSize( self )
 	local size, shift = self.size, self.shift
 
@@ -133,7 +153,7 @@ end
 local function lowerTrie( self, transient )
 	local lowerShift = self.shift - 5
 	local node = self.root[2]
-	for level = lowerShift, 1, -5 do
+	for _ = lowerShift, 1, -5 do
 		node = node[1]
 	end
 	if transient then
@@ -249,7 +269,6 @@ function PVec:ipairs()
 	local size = self.size
 	local shift = self.shift
 	local tail = self.tail
-	local index = 0
 	local jump = 33
 	local stack
 	local leaf
@@ -320,6 +339,7 @@ function PVec:filter( p )
 end
 
 function PVec:reduce( f, acc )
+	local stop
 	for i, v in self:ipairs() do
 		acc, stop = f(v,acc,i,self)
 		if stop then break end
