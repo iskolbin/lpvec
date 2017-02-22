@@ -1,22 +1,47 @@
 --[[
 
- PVec - v1.0.0 - public domain persistent vector for Lua 5.2/LuaJIT
+ PVec - v1.1.0 - public domain persistent vector for Lua
  no warranty implied; use at your own risk
 
  Based on PVec.java by hyPiRion(jeannikl@hypirion.com),
  see https://github.com/hyPiRion/pvec-perf.
- Needs LuaJIT bitOp or Lua 5.2 bit32 library to work
+
+ Needs LuaJIT bitOp or Lua 5.2 bit32 library to work, otherwise
+ fallbacks to pure Lua implementation (Lua 5.1) or use bitwise ops
+ of Lua 5.3.
+
+ Functions for pure Lua implementation taken from David's Manura
+ numberlua library(https://github.com/davidm/lua-bit-numberlua). Original
+ license for the library is
+
+ ============================================================================
+ Copyright (C) 2008, David Manura.
+
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+
+ The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
+
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+ =============================================================================
 
  author: Ilya Kolbin (iskolbin@gmail.com)
  url: github.com/iskolbin/priorityqueue
 
- TODO
-
- fallbacks for 5.1 and shift ops for 5.3
-
  COMPATIBILITY
 
- Lua 5.2, LuaJIT 1, 2, needs bitOp or bit32 library
+ Lua 5.1, 5.2, 5.3, LuaJIT 1, 2
 
  LICENSE
 
@@ -29,9 +54,65 @@
 local floor, assert, setmetatable = math.floor, _G.assert, _G.setmetatable
 local unpack = table.unpack or _G.unpack
 
-local shr = (_G.bit or _G.bit32).arshift
-local shl = (_G.bit or _G.bit32).lshift
-local xor = (_G.bit or _G.bit32).bxor
+local bit = _G.bit or _G.bit32 or _VERSION == 'Lua 5.3' and {
+	lshift = load[[return function( a, b ) return (a << b) & 0xffffffff end]](),
+	arshift = load[[return function( a, b ) return (a >> b) & 0xffffffff end]](),
+	xor = load[[return function( a, b ) return (a ~ b) end]](),
+} or {
+	lshift = function( a, b )
+		return floor( a * 2^b ) % 2^32
+	end,
+	arshift = function( a, b )
+		local z = floor(a % 2^32 / 2^b)
+		if a >= 0x80000000 then
+			z = z + floor( (2^b-1) * 2^(32-b) ) % 2^32
+		end
+		return z
+	end,
+	bxor = (loadstring or load)[[
+	local function memoize(f)
+		local mt = {}
+		local t = setmetatable({}, mt)
+		function mt:__index(k)
+			local v = f(k); t[k] = v
+			return v
+		end
+		return t
+	end
+
+	local function make_bitop_uncached(t, m)
+		local function bitop(a, b)
+			local res,p = 0,1
+			while a ~= 0 and b ~= 0 do
+				local am, bm = a%m, b%m
+				res = res + t[am][bm]*p
+				a = (a - am) / m
+				b = (b - bm) / m
+				p = p*m
+			end
+			res = res + (a+b)*p
+			return res
+		end
+		return bitop
+	end
+
+	local function make_bitop(t)
+		local op1 = make_bitop_uncached(t,2^1)
+		local op2 = memoize(function(a)
+			return memoize(function(b)
+				return op1(a, b)
+			end)
+		end)
+		return make_bitop_uncached(op2, 2^(t.n or 1))
+	end
+
+	return make_bitop {[0]={[0]=0,[1]=1},[1]={[0]=1,[1]=0}, n=4}
+	]]()
+}
+
+local shr = bit.arshift
+local shl = bit.lshift
+local xor = bit.bxor
 
 local EMPTY_TAIL = {}
 
