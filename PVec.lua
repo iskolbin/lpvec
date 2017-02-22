@@ -54,7 +54,7 @@
 local floor, assert, setmetatable = math.floor, _G.assert, _G.setmetatable
 local unpack = table.unpack or _G.unpack
 
-local bit = _G.bit or _G.bit32 or _VERSION == 'Lua 5.3' and {
+local bit = _G.bit or _G.bit32 or _VERSION >= 'Lua 5.3' and {
 	lshift = load[[return function( a, b ) return (a << b) & 0xffffffff end]](),
 	arshift = load[[return function( a, b ) return (a >> b) & 0xffffffff end]](),
 	xor = load[[return function( a, b ) return (a ~ b) end]](),
