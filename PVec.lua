@@ -69,7 +69,7 @@ local bit = _G.bit or _G.bit32 or _VERSION >= 'Lua 5.3' and {
 		end
 		return z
 	end,
-	bxor = (loadstring or load)[[
+	bxor = (function()
 	local function memoize(f)
 		local mt = {}
 		local t = setmetatable({}, mt)
@@ -107,7 +107,7 @@ local bit = _G.bit or _G.bit32 or _VERSION >= 'Lua 5.3' and {
 	end
 
 	return make_bitop {[0]={[0]=0,[1]=1},[1]={[0]=1,[1]=0}, n=4}
-	]]()
+	end)()
 }
 
 local shr = bit.arshift
